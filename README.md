@@ -19,6 +19,20 @@ Built for CodeAlta 3.4.0. CodeAlta Desktop only; the TUI does not load it.
 - `git` on the PATH of CodeAlta. That is the only hard requirement.
 - Optional token sources: the GitHub CLI `gh` and the Azure CLI `az`.
 
+## Install
+
+CodeAlta builds and loads every plugin folder in `~/.alta/plugins`. Clone the repository there, under the id of the plugin:
+
+```sh
+git clone https://github.com/windischb/codealta-repo-browser ~/.alta/plugins/repo-browser
+```
+
+Then click **Build and reload** in Settings › Plugins (or run `alta plugin refresh` in a session). The **Repositories** button appears in the title bar. Read the code first: a plugin runs inside CodeAlta with your rights.
+
+**Update:** `git -C ~/.alta/plugins/repo-browser pull`, then **Build and reload** (`alta plugin reload repo-browser`).
+
+**Remove:** delete `~/.alta/plugins/repo-browser`, then `alta plugin refresh`. The accounts stay in `~/.alta/plugin-data/plugin_repo-browser/` until you delete that folder too.
+
 ## Accounts
 
 An account says *where* (service and host), *what* (owners or organizations) and *how to sign in* (a credential **source**). It never holds a token.
@@ -88,7 +102,7 @@ ui/settings.js           # Settings › Repositories
 ui/repositories.js       # the Repositories tab
 ```
 
-The folder is a git repository of its own, in `~/.alta/plugins/repo-browser` where CodeAlta builds it; `~/git/codealta-repo-browser` links to it. (A link the other way round does not build: the build runs in the folder the link resolves to, which does not see the `Directory.Build.props` CodeAlta writes in `~/.alta/plugins`.)
+**Developing it.** Work in a clone of your own (such as `~/git/codealta-repo-browser`) and keep the installed clone in `~/.alta/plugins/repo-browser` with that folder as a remote: commit in the first, then `git -C ~/.alta/plugins/repo-browser pull` and `alta plugin reload repo-browser`. A link from `~/.alta/plugins` to your clone does not build in CodeAlta 3.4.0: the build runs in the folder the link resolves to, which does not see the `Directory.Build.props` CodeAlta writes in `~/.alta/plugins`.
 
 ## Not yet
 
