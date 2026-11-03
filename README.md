@@ -45,8 +45,9 @@ An account says *where* (service and host), *what* (owners or organizations) and
 | Azure DevOps (`dev.azure.com`) | **Azure CLI**: `az account get-access-token` for Azure DevOps, with the profile you give (`AZURE_CONFIG_DIR=…`) | `Bearer` |
 | | **Environment variable** holding a personal access token, such as `AZURE_DEVOPS_EXT_PAT` | `Basic :<PAT>` |
 
-- **GitHub owners**: users or organizations to keep. Empty lists every repository the token sees (owned, collaborator, organization member). Without a sign-in, owners are required.
-- **Azure DevOps organizations** are required and entered by hand. All projects of each organization are listed; the owner of a repository is `org/project`.
+- **GitHub owners**: the users or organizations to list, the first part of their address: `dotnet` for `https://github.com/dotnet` (pasting the address works too). With a sign-in, each owner's repositories are listed, whether you belong to it or not, including the private ones you may see. Empty lists every repository the token sees (owned, collaborator, organization member). Without a sign-in, owners are required, and GitHub allows 60 requests an hour.
+- **Azure DevOps organizations** are required and entered by hand (`contoso`, or `https://dev.azure.com/contoso`). All projects of each organization are listed; the owner of a repository is `org/project`.
+- **Name and id**: a new account gets them from the service and the first owner (`GitHub (dotnet)`, `github-dotnet`) until you type your own. The id is what agents pass to the canvas actions.
 - **Environment variables** are read from the environment CodeAlta was started with. A variable set later needs a restart of CodeAlta.
 - **CLI profile**: one `NAME=value` per line, such as `GH_CONFIG_DIR=~/.config/gh-work`. Names that look like secrets (`*TOKEN*`, `*PAT`, `*SECRET*`, `*PASSWORD*`) are refused. While a CLI runs, `GH_TOKEN`/`GITHUB_TOKEN` are removed from its environment, so the profile decides. Note that `gh` falls back to the token of the host in the system keyring when the profile folder holds no sign-in.
 - **Check** says who the account signs in as (`Signed in as …`), or why it does not.
