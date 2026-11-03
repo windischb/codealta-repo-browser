@@ -99,6 +99,7 @@ export default function Repositories() {
     const [owner, setOwner] = useState("");
     const [hideArchived, setHideArchived] = useState(true);
     const [hideForks, setHideForks] = useState(false);
+    const [hidePrivate, setHidePrivate] = useState(false);
     const [problem, setProblem] = useState(null);
     const loadRun = useRef(null);
     const finished = useRef(new Set());
@@ -191,11 +192,15 @@ export default function Repositories() {
 
     const cloneByKey = useMemo(() => Object.fromEntries(running.map(clone => [clone.key, clone])), [clones.latest]);
     const owners = useMemo(() => [...new Set(repos.map(repo => repo.owner))].sort((a, b) => a.localeCompare(b)), [repos]);
+    // An account without a sign-in lists public repositories only: there is nothing private to hide, and the switch is disabled.
+    const signedIn = (state?.accounts ?? []).find(item => item.id === accountId)?.credential !== "none";
+    const hidingPrivate = hidePrivate && signedIn;
     const filtered = useMemo(() => {
         const text = query.trim().toLowerCase();
-        return repos.filter(repo => (!hideArchived || !repo.isArchived) && (!hideForks || !repo.isFork) && (!owner || repo.owner === owner)
+        return repos.filter(repo => (!hideArchived || !repo.isArchived) && (!hideForks || !repo.isFork) && (!hidingPrivate || !repo.isPrivate)
+            && (!owner || repo.owner === owner)
             && (!text || repo.fullName.toLowerCase().includes(text) || (repo.description ?? "").toLowerCase().includes(text)));
-    }, [repos, query, owner, hideArchived, hideForks]);
+    }, [repos, query, owner, hideArchived, hideForks, hidingPrivate]);
 
     async function clone(repo) {
         setProblem(null);
@@ -212,6 +217,7 @@ export default function Repositories() {
         setQuery("");
         setOwner("");
         setHideArchived(false);
+        setHidePrivate(false);
         setHideForks(false);
     }
 
@@ -307,7 +313,7 @@ export default function Repositories() {
         </div>`);
 
     const rows = filtered.slice(0, shownRows);
-    const filtering = query.trim() !== "" || owner !== "" || hideArchived || hideForks;
+    const filtering = query.trim() !== "" || owner !== "" || hideArchived || hideForks || hidingPrivate;
     let list;
     if (loadError && repos.length === 0) list = null;
     else if (rows.length > 0) list = html`<${Card} className="rb-list">${rows.map(row)}<//>`;
@@ -353,6 +359,10 @@ export default function Repositories() {
                         options=${[{ value: "", label: "Every owner" }, ...owners.map(item => ({ value: item, label: item }))]} />
                     <${Switch} className="rb-switch" checked=${hideArchived} label="Hide archived" onChange=${event => setHideArchived(event.target.checked)} />
                     <${Switch} className="rb-switch" checked=${hideForks} label="Hide forks" onChange=${event => setHideForks(event.target.checked)} />
+                    <span title=${signedIn ? "" : "No sign-in: this account lists public repositories only."}>
+                        <${Switch} className="rb-switch" checked=${hidingPrivate} disabled=${!signedIn} label="Hide private"
+                            onChange=${event => setHidePrivate(event.target.checked)} />
+                    </span>
                     <span className="rb-spacer" />
                     <span className="rb-inline rb-muted rb-small" aria-live="polite">
                         ${loading
