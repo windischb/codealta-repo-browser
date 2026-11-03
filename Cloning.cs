@@ -27,7 +27,9 @@ public sealed class ProjectIndex(IPluginServices services)
     private readonly Lock _gate = new();
     private IReadOnlyDictionary<string, string> _byKey = new Dictionary<string, string>();
     private Task _refresh = Task.CompletedTask;
-    private long _readAt = long.MinValue;
+    // Environment.TickCount64 counts from the start of the system: 0 is "long ago", and a difference with it cannot overflow
+    // (long.MinValue did, so a first read that failed at the start was never tried again).
+    private long _readAt;
 
     /// <summary>Gets the path of the project that is a clone of a repository, or null.</summary>
     public string? Find(string key) => Volatile.Read(ref _byKey).TryGetValue(key, out var path) ? path : null;
