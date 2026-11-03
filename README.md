@@ -41,9 +41,10 @@ An account says *where* (service and host), *what* (owners or organizations) and
 
 ## Cloning
 
-- The target is `<clone folder>/<repository>` (or `<clone folder>/<owner>/<repository>`). A name that is not a safe folder name is refused.
-- A repository that is already a project of CodeAlta (its `origin` names it) shows **In CodeAlta** and is never cloned again.
-- A target folder with a clone of the same repository shows **On disk**; **Add project** only adds it.
+- The target is `<clone folder>/<repository>` (or `<clone folder>/<owner>/<repository>`). A name with a path separator, a character Windows refuses in file names, a control character, or a trailing dot or space is refused.
+- A repository that is already a project of CodeAlta shows **In CodeAlta** and is never cloned again. Every remote counts, not only `origin`: a clone of an upstream whose `fork` remote is your fork is that fork's project too.
+- A target folder with a clone of the same repository (any of its remotes) shows **On disk**; **Add project** only adds it.
+- A target folder with a clone of *another* repository of the same name shows **Folder in the way**; the `owner` layout avoids such clashes.
 - A target that is a file, holds other files, or is a clone of another repository shows **Folder in the way**: nothing is overwritten.
 - `git clone --progress` runs without a shell. The progress is shown in the row. **Cancel** stops git and removes the folder the clone created.
 - Then `alta project add <folder> --space <space>` adds the project to the space chosen above the table (the space the window shows by default).

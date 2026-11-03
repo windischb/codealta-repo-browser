@@ -19,7 +19,8 @@ public sealed record CloneSnapshot(string Key, string AccountId, string FullName
 public sealed record SpaceItem(string Id, string Name, bool Current);
 
 /// <summary>
-/// The repositories the projects of CodeAlta are clones of: the key of each project's <c>origin</c>. It is read in background work at the
+/// The repositories the projects of CodeAlta are clones of: the key of each remote of each project (<c>origin</c>, and a <c>fork</c> or an
+/// <c>upstream</c> beside it). It is read in background work at the
 /// start, after each clone, and again at a status when the last read is older than half a minute; never on the path of a list.
 /// </summary>
 public sealed class ProjectIndex(IPluginServices services)
@@ -83,13 +84,17 @@ public sealed class ProjectIndex(IPluginServices services)
             }
         }
 
-        var byKey = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        var remotes = new ConcurrentBag<(string Path, IReadOnlyList<Git.Remote> Remotes)>();
         await Parallel.ForEachAsync(paths, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken }, async (path, token) =>
         {
-            if (!Directory.Exists(path)) return;
-            if (await Git.OriginKeyAsync(git, path, token) is { } key) byKey.TryAdd(key, path);
+            if (Directory.Exists(path)) remotes.Add((path, await Git.RemotesAsync(git, path, token)));
         });
-        Volatile.Write(ref _byKey, new Dictionary<string, string>(byKey, StringComparer.Ordinal));
+
+        // A repository that is the origin of one project and only a fork or upstream of another is found as the first.
+        var byKey = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (path, list) in remotes) foreach (var remote in list.Where(remote => remote.IsOrigin)) byKey.TryAdd(remote.Key, path);
+        foreach (var (path, list) in remotes) foreach (var remote in list.Where(remote => !remote.IsOrigin)) byKey.TryAdd(remote.Key, path);
+        Volatile.Write(ref _byKey, byKey);
         Volatile.Write(ref _readAt, Environment.TickCount64);
     }
 }
@@ -98,11 +103,30 @@ public sealed class ProjectIndex(IPluginServices services)
 /// <summary>The git commands the plugin runs.</summary>
 public static class Git
 {
-    /// <summary>The key of the <c>origin</c> of a folder, or null.</summary>
-    public static async Task<string?> OriginKeyAsync(CliLocator.CliCommand git, string path, CancellationToken cancellationToken)
+    /// <summary>A remote of a folder: its name and the key of the repository it names.</summary>
+    public sealed record Remote(string Name, string Key)
     {
-        var result = await ProcessRunner.RunAsync(git, ["-C", path, "remote", "get-url", "origin"], path, Quiet, TimeSpan.FromSeconds(5), null, cancellationToken);
-        return result.ExitCode == 0 ? RepositoryKey.FromRemote(result.Stdout.Trim()) : null;
+        /// <summary>Gets a value indicating whether this is <c>origin</c>.</summary>
+        public bool IsOrigin => Name == "origin";
+    }
+
+    /// <summary>The remotes of a folder whose URL names a repository, <c>origin</c> first; empty when it has none or is no git folder.</summary>
+    public static async Task<IReadOnlyList<Remote>> RemotesAsync(CliLocator.CliCommand git, string path, CancellationToken cancellationToken)
+    {
+        // One process for every remote: "remote.<name>.url <url>" per line.
+        var result = await ProcessRunner.RunAsync(git, ["-C", path, "config", "--get-regexp", @"^remote\..*\.url$"], path, Quiet, TimeSpan.FromSeconds(5), null, cancellationToken);
+        if (result.ExitCode != 0) return [];
+        var remotes = new List<Remote>();
+        foreach (var line in result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var space = line.IndexOf(' ');
+            if (space <= 0) continue;
+            var name = line[..space];
+            if (!name.StartsWith("remote.", StringComparison.Ordinal) || !name.EndsWith(".url", StringComparison.Ordinal)) continue;
+            if (RepositoryKey.FromRemote(line[(space + 1)..].Trim()) is { } key) remotes.Add(new Remote(name["remote.".Length..^".url".Length], key));
+        }
+
+        return [.. remotes.OrderBy(remote => remote.IsOrigin ? 0 : 1)];
     }
 
     /// <summary>The variables that keep git from asking anything.</summary>
@@ -132,7 +156,7 @@ public sealed partial class CloneService(IPluginServices services, Action<string
         segments.Add(repository.Name);
         foreach (var segment in segments)
         {
-            if (!SafeName().IsMatch(segment) || segment is "." or "..")
+            if (!IsSafeName(segment))
                 throw new RepoBrowserException("bad_name", $"'{segment}' cannot be the name of a folder.");
         }
 
@@ -290,9 +314,10 @@ public sealed partial class CloneService(IPluginServices services, Action<string
         if (!Directory.EnumerateFileSystemEntries(target).Any()) return ("none", null);
         if (Directory.Exists(Path.Combine(target, ".git")) || File.Exists(Path.Combine(target, ".git")))
         {
-            var origin = git is null ? null : await Git.OriginKeyAsync(git, target, cancellationToken);
-            if (origin == key) return ("onDisk", null);
-            return ("conflict", origin is null ? $"{target} is a git folder without the same origin." : $"{target} is a clone of another repository ({origin}).");
+            // A clone whose origin is the upstream and whose fork remote is this repository is a clone of it too.
+            var remotes = git is null ? [] : await Git.RemotesAsync(git, target, cancellationToken);
+            if (remotes.Any(remote => remote.Key == key)) return ("onDisk", null);
+            return ("conflict", remotes.Count == 0 ? $"{target} is a git folder without a remote of this repository." : $"{target} is a clone of another repository with this name ({remotes[0].Key}). The folder layout 'owner' gives each owner a folder of its own.");
         }
 
         return ("conflict", $"{target} exists and holds other files: nothing is overwritten.");
@@ -314,8 +339,13 @@ public sealed partial class CloneService(IPluginServices services, Action<string
         => string.Join(" ", text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(line => !line.Contains('%')).TakeLast(3));
 
-    [GeneratedRegex(@"^[A-Za-z0-9._ \-]{1,200}$")]
-    private static partial Regex SafeName();
+    // A name from the service becomes one folder: no separator, no character a system refuses in a file name (those of Windows on
+    // every system, so a layout works the same everywhere), no control character, no space at its start and no dot or space at its end. ".github" and "Marmind (archived)" are fine.
+    private static readonly char[] Refused = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
+    private static bool IsSafeName(string segment)
+        => segment.Length is > 0 and <= 200 && segment is not ("." or "..") && segment.IndexOfAny(Refused) < 0 && !segment.Any(char.IsControl)
+           && segment[0] != ' ' && segment[^1] is not ('.' or ' ');
 }
 
 /// <summary>One clone: its state, and the progress of git.</summary>
