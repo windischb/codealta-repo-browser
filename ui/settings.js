@@ -11,6 +11,29 @@ const providers = [
 
 const providerOf = value => providers.find(item => item.value === value) ?? providers[0];
 
+// The owner a text names: the name, or the first part of an address copied from the browser (the plugin reads it the same way).
+function ownerOf(text) {
+    let value = text.trim().replace(/^@/, "");
+    if (!value.includes("://") && value.includes("/") && value.split("/")[0].includes(".")) value = `https://${value}`;
+    try {
+        const url = new URL(value);
+        if (url.hostname.endsWith(".visualstudio.com")) return url.hostname.slice(0, -".visualstudio.com".length);
+        return decodeURIComponent(url.pathname.split("/").filter(Boolean)[0] ?? "");
+    } catch {
+        return value.split("/").filter(Boolean)[0] ?? "";
+    }
+}
+
+const slug = text => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+
+// What a new account is called until the user names it: "github-dotnet", "GitHub (dotnet)".
+function suggestion(account) {
+    const owner = (account.owners ?? [])[0];
+    const short = account.provider === "azureDevOps" ? "Azure DevOps" : "GitHub";
+    const prefix = account.provider === "azureDevOps" ? "ado" : "github";
+    return { id: slug(owner ? `${prefix}-${owner}` : prefix), displayName: owner ? `${short} (${owner})` : short };
+}
+
 function emptyAccount(provider = "gitHub") {
     const kind = providerOf(provider);
     return { id: "", displayName: "", provider, host: kind.host, owners: [], credential: { kind: "cli", variable: null, cliEnvironment: {} }, protocol: "https" };
@@ -151,8 +174,20 @@ function AccountEditor({ draft, busy, problem, isNew, onChange, onSave, onCancel
     const credential = draft.credential ?? { kind: "none" };
     const [ownersText, setOwnersText] = useState((draft.owners ?? []).join(", "));
     const [cliText, setCliText] = useState(Object.entries(credential.cliEnvironment ?? {}).map(([name, value]) => `${name}=${value}`).join("\n"));
-    const set = changes => onChange({ ...draft, ...changes });
+    // A new account gets its id and its name from the service and the first owner, until the user types one.
+    const [idTouched, setIdTouched] = useState(!isNew || Boolean(draft.id));
+    const [nameTouched, setNameTouched] = useState(!isNew || Boolean(draft.displayName));
+    const set = changes => {
+        const next = { ...draft, ...changes };
+        const suggested = suggestion(next);
+        onChange({
+            ...next,
+            ...(idTouched || "id" in changes ? {} : { id: suggested.id }),
+            ...(nameTouched || "displayName" in changes ? {} : { displayName: suggested.displayName }),
+        });
+    };
     const setCredential = changes => set({ credential: { ...credential, ...changes } });
+    useEffect(() => { if (isNew && !draft.id) set({}); }, []);
 
     function setProvider(value) {
         // One change: two in a row would each start from the same draft, and the second would undo the first.
@@ -172,7 +207,7 @@ function AccountEditor({ draft, busy, problem, isNew, onChange, onSave, onCancel
 
     function setOwners(text) {
         setOwnersText(text);
-        set({ owners: text.split(/[,\s]+/).map(owner => owner.trim()).filter(Boolean) });
+        set({ owners: text.split(/[,\s]+/).map(ownerOf).filter(Boolean) });
     }
 
     const field = { style: { flex: "1 1 240px", margin: 0 } };
@@ -188,16 +223,10 @@ function AccountEditor({ draft, busy, problem, isNew, onChange, onSave, onCancel
                     <${InputGroup} id=${ids.host} value=${draft.host} disabled=${draft.provider === "azureDevOps"} onChange=${event => set({ host: event.target.value })} />
                 <//>
             </div>
-            <div style=${{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                <${FormGroup} ...${field} label="Id" labelFor=${ids.id} helperText="Lower-case letters, digits and -, such as github-work">
-                    <${InputGroup} id=${ids.id} value=${draft.id} onChange=${event => set({ id: event.target.value.toLowerCase() })} />
-                <//>
-                <${FormGroup} ...${field} label="Name" labelFor=${ids.name}>
-                    <${InputGroup} id=${ids.name} value=${draft.displayName} placeholder=${kind.label} onChange=${event => set({ displayName: event.target.value })} />
-                <//>
-            </div>
             <${FormGroup} style=${{ margin: 0 }} label=${draft.provider === "azureDevOps" ? "Organizations" : "Owners"} labelFor=${ids.owners}
-                helperText=${draft.provider === "azureDevOps" ? "Required: the organizations of dev.azure.com, separated by commas" : "Users or organizations to list, separated by commas; empty: every repository the token sees"}>
+                helperText=${draft.provider === "azureDevOps"
+                    ? "Required: the organizations of dev.azure.com, separated by commas. An address such as https://dev.azure.com/contoso works too."
+                    : "Users or organizations, separated by commas: dotnet, or its address https://github.com/dotnet. Empty: every repository the token sees."}>
                 <${InputGroup} id=${ids.owners} value=${ownersText} onChange=${event => setOwners(event.target.value)} />
             <//>
             <div style=${{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -225,6 +254,16 @@ function AccountEditor({ draft, busy, problem, isNew, onChange, onSave, onCancel
                     helperText=${`One NAME=value per line, such as ${kind.cli}=~/.config/${draft.provider === "gitHub" ? "gh-work" : "azure-work"}; empty for the default profile.`}>
                     <${TextArea} id=${ids.cli} fill rows=${2} value=${cliText} placeholder=${`${kind.cli}=`} onChange=${event => setCli(event.target.value)} />
                 <//>`}
+            <div style=${{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <${FormGroup} ...${field} label="Name" labelFor=${ids.name} helperText="As the account picker of the Repositories tab shows it.">
+                    <${InputGroup} id=${ids.name} value=${draft.displayName} placeholder=${suggestion(draft).displayName}
+                        onChange=${event => { setNameTouched(true); set({ displayName: event.target.value }); }} />
+                <//>
+                <${FormGroup} ...${field} label="Id (short name for agents)" labelFor=${ids.id} helperText="Lower-case letters, digits and -; suggested from the service and the owner.">
+                    <${InputGroup} id=${ids.id} value=${draft.id} placeholder=${suggestion(draft).id}
+                        onChange=${event => { setIdTouched(true); set({ id: event.target.value.toLowerCase() }); }} />
+                <//>
+            </div>
             ${check && !check.pending && html`<${CheckLine} check=${check} />`}
             ${problem && html`<${Callout} intent="danger" icon="error">${problem}<//>`}
             <div style=${{ display: "flex", gap: 8 }}>

@@ -31,9 +31,11 @@ public sealed class GitHubClient(HttpClient http, CredentialResolver credentials
         var token = await Credentials.ResolveAsync(account, ct);
         var owners = new HashSet<string>(account.Owners, StringComparer.OrdinalIgnoreCase);
         var root = ApiRoot(account);
-        IEnumerable<Uri> starts = token is null
-            ? account.Owners.Select(owner => new Uri(root, $"users/{Uri.EscapeDataString(owner)}/repos?per_page=100&type=owner&sort=full_name"))
-            : [new Uri(root, "user/repos?affiliation=owner,collaborator,organization_member&per_page=100&sort=full_name")];
+        IReadOnlyList<Uri> starts = token is null
+            ? [.. account.Owners.Select(owner => new Uri(root, $"users/{Uri.EscapeDataString(owner)}/repos?per_page=100&type=owner&sort=full_name"))]
+            : account.Owners.Count == 0
+                ? [new Uri(root, "user/repos?affiliation=owner,collaborator,organization_member&per_page=100&sort=full_name")]
+                : await OwnerStartsAsync(account, token, ct);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var start in starts)
         {
@@ -57,6 +59,44 @@ public sealed class GitHubClient(HttpClient http, CredentialResolver credentials
                 next = NextLink(headers);
             }
         }
+    }
+
+    // Signed in with owners: the repositories of each owner, whether the user is a member or not (dotnet, a colleague's account), with
+    // the higher limit of a signed-in account and the private ones the token may see. Filtering /user/repos would miss every owner the
+    // user is not part of.
+    private async Task<IReadOnlyList<Uri>> OwnerStartsAsync(HostingAccount account, AccountToken token, CancellationToken ct)
+    {
+        var root = ApiRoot(account);
+        string? login;
+        var (me, _) = await GetAsync(new Uri(root, "user"), ApiHost(account), token, ct);
+        using (me) login = Text(me.RootElement, "login");
+
+        var starts = new List<Uri>();
+        foreach (var owner in account.Owners)
+        {
+            var name = Uri.EscapeDataString(owner);
+            if (string.Equals(owner, login, StringComparison.OrdinalIgnoreCase))
+            {
+                starts.Add(new Uri(root, "user/repos?affiliation=owner&per_page=100&sort=full_name"));
+                continue;
+            }
+
+            JsonDocument found;
+            try { (found, _) = await GetAsync(new Uri(root, $"users/{name}"), ApiHost(account), token, ct); }
+            catch (RepoBrowserException error) when (error.Code == "not_found")
+            {
+                throw new RepoBrowserException("not_found", $"{account.Host} has no user or organization named '{owner}'.");
+            }
+
+            using (found)
+            {
+                starts.Add(Text(found.RootElement, "type") == "Organization"
+                    ? new Uri(root, $"orgs/{name}/repos?type=all&per_page=100&sort=full_name")
+                    : new Uri(root, $"users/{name}/repos?type=owner&per_page=100&sort=full_name"));
+            }
+        }
+
+        return starts;
     }
 
     /// <inheritdoc />

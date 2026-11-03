@@ -155,8 +155,8 @@ public sealed partial class AccountStore(IPluginStateStore state, JsonSerializer
         host = host.ToLowerInvariant();
         if (!HostPattern().IsMatch(host)) Fail(given, "the host is a name such as github.com, without a path.");
         if (given.Provider == HostingProvider.AzureDevOps && host != "dev.azure.com") Fail(given, "Azure DevOps accounts are on dev.azure.com.");
-        var owners = (given.Owners ?? []).Select(owner => owner.Trim().Trim('/')).Where(owner => owner.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (owners.Any(owner => !OwnerPattern().IsMatch(owner))) Fail(given, "an owner is a name of letters, digits, '.', '_' or '-'.");
+        var owners = (given.Owners ?? []).Select(OwnerOf).Where(owner => owner.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (owners.Any(owner => !OwnerPattern().IsMatch(owner))) Fail(given, "an owner is a name of letters, digits, '.', '_' or '-', or the address of its page.");
         if (given.Provider == HostingProvider.AzureDevOps && owners.Count == 0) Fail(given, "name at least one organization.");
 
         var credential = given.Credential ?? CredentialSource.None;
@@ -192,6 +192,33 @@ public sealed partial class AccountStore(IPluginStateStore state, JsonSerializer
         {
             Id = id, DisplayName = displayName, Provider = given.Provider, Host = host, Owners = owners, Credential = credential, Protocol = given.Protocol,
         };
+    }
+
+    /// <summary>
+    /// The owner a text names: the name itself, or the first part of the path of an address copied from the browser
+    /// (<c>https://github.com/dotnet/runtime</c> and <c>github.com/dotnet</c> are <c>dotnet</c>;
+    /// <c>https://dev.azure.com/contoso/project</c> and <c>https://contoso.visualstudio.com</c> are <c>contoso</c>).
+    /// </summary>
+    public static string OwnerOf(string? text)
+    {
+        var value = (text ?? "").Trim().TrimStart('@');
+        if (value.Length == 0) return "";
+        if (!value.Contains("://", StringComparison.Ordinal) && value.Contains('/'))
+        {
+            // "github.com/dotnet" is an address without its scheme; "dotnet/runtime" is an owner and a repository.
+            var head = value[..value.IndexOf('/')];
+            if (head.Contains('.')) value = "https://" + value;
+        }
+
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
+        {
+            var host = uri.Host.ToLowerInvariant();
+            if (host.EndsWith(".visualstudio.com", StringComparison.Ordinal)) return host[..^".visualstudio.com".Length];
+            var first = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            return first is null ? "" : Uri.UnescapeDataString(first);
+        }
+
+        return value.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
     }
 
     [DoesNotReturn]
