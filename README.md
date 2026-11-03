@@ -107,3 +107,7 @@ ui/repositories.js       # the Repositories tab
 ## Not yet
 
 GitLab and Bitbucket (the model has room for them), forking or creating repositories, and the TUI.
+
+## License
+
+BSD 2-Clause, the license of [CodeAlta](https://github.com/CodeAlta/CodeAlta): see [license.txt](license.txt).
